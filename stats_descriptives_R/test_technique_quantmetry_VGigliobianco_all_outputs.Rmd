@@ -1,0 +1,534 @@
+---
+title: "Test technique Quantmetry"
+author: "Vincent Gigliobianco"
+date:
+output:
+  html_document:
+    df_print: paged
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+# AVANT j'avais
+# knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(collapse = T,comment = "#>", results = 'asis')
+
+source("install_packages.R",encoding = "UTF-8")
+library(knitr)
+library(dplyr)
+library(ggplot2)
+library(Hmisc)
+library(corrplot)
+library(reshape2)
+library(pander) # Writes to Pandoc, which Rmarkdown uses to make nice output
+### library(descr, quietly = TRUE)
+library(descr)
+library(nlme)
+library(gridExtra)
+library(stringr)
+# tinytex::install_tinytex()
+
+source("fun.R",encoding = "UTF-8")
+```
+
+# 1. Statistiques descriptives
+
+## 1. Description du jeu de données
+
+Dans un premier temps, l’identification des valeurs manquantes et de données aberrantes a été réalisée dont le cas des candidats ayant des notes élevées pour un obtenir un dataset nettoyé.
+
+Dans mes analyses, j’aborde la description de la variable cible embauche, les analyses univariées et bivariées des variables ainsi qu’une partie transformat ion des données pour compléter l’analyse en vue de d’identifier des variables à sélectionner pour la partie Machine Learning.
+
+```{r echo=FALSE}
+# Import des données
+df_data <-read.csv(file = "Test technique - data_v1.0.csv")
+```
+```{r echo=FALSE}
+# Suppression des index
+df_data$X = NULL
+df_data$index = NULL
+```
+Format des colonnes:
+```{r echo=FALSE}
+# On regarde le type de toutes les colonnes
+pander(str(df_data))
+```
+
+### 1. Valeurs manquantes et aberrantes
+
+Après import des données, les variables continues dont les distributions sont normales, permettent d’identifier rapidement des données non adaptées au cas métier telles que des candidats très jeunes ou très vieux, des notes à l’exercice strictement supérieures à 100. Des analyses univariées indiquent un pourcentage proche de 0,5% de valeurs à NA pour chacune des variables age, exp, salaire et note. Elles ont aussi indiqué un pourcentage proche de 0,5% de valeurs à vide pour chacune des variables catégorielles date, cheveux, sexe, diplome, specialite et dispo. 
+
+```{r echo=FALSE, warning=FALSE}
+# Réalisation des histogrammes
+g1 = fun_build_1d_plot("age",df_data)
+g2 = fun_build_1d_plot("exp",df_data)
+g3 = fun_build_1d_plot("salaire",df_data)
+g4 = fun_build_1d_plot("note",df_data)
+
+grid.arrange(g1,g2,g3,g4,nrow = 2,ncol = 2)
+```
+```{r echo=FALSE}
+# Distribution (comptages par modalité) de la variable exp
+pander(table(df_data$exp))
+
+```
+```{r echo=FALSE}
+# Nombre de valeurs NA pour les variables age, exp, salaire et note
+pander(sapply(df_data[,c("age","exp","salaire","note")], function(x) sum(is.na(x))))
+```
+
+```{r echo=FALSE}
+# Nombre de valeurs NA pour la variable date
+pander(sum(is.na(df_data$date)))
+# Distribution (comptages par modalité) des variables cheveux,sexe,diplome et specialite
+# en tenant compte des valeurs NA
+pander(table(df_data$cheveux,useNA = "always"))
+pander(table(df_data$sexe,useNA = "always"))
+pander(table(df_data$diplome,useNA = "always"))
+pander(table(df_data$specialite,useNA = "always"))
+# pander(sapply(df_data[,c("date", "cheveux", "sexe", "diplome","specialite", "dispo")], function(x) table(x,useNA = "always")))
+```
+    
+```{r echo=FALSE}
+# Nombre de valeurs à "" pour les variables date, cheveux, sexe, diplome, specialite et dispo
+pander(sapply(df_data[,c("date", "cheveux", "sexe", "diplome","specialite", "dispo")], function(x) sum(x == "")))
+
+# On force les valeurs à "" à la valeur "NR"
+df_data$date <- as.factor(ifelse(as.character(df_data$date == ""),"NR",as.character(df_data$date)))
+df_data$cheveux <- as.factor(ifelse(as.character(df_data$cheveux == ""),"NR",as.character(df_data$cheveux)))
+df_data$sexe <- as.factor(ifelse(as.character(df_data$sexe == ""),"NR",as.character(df_data$sexe)))
+df_data$diplome <- as.factor(ifelse(as.character(df_data$diplome == ""),"NR", as.character(df_data$diplome)))
+df_data$specialite <- as.factor(ifelse(as.character(df_data$specialite == ""),"NR",as.character(df_data$specialite)))
+df_data$dispo <- as.factor(ifelse(as.character(df_data$dispo == ""),"NR",as.character(df_data$dispo)))
+```
+
+Ainsi pour nettoyer le dataset j'ai donc envisagé:
+
+* de restreindre l'âge des candidats entre [17;65]
+* Pour l’expérience, deux valeurs négatives ont été ôtées
+* Les valeurs manquantes identifiées ont été ôtées pour les variables date, cheveux, sexe, diplome, specialite et dispo ainsi que pour les variables age, exp, salaire
+* Enfin, pour le cas des candidats ayant eu des notes supérieures à 100, la distribution dissymétrique vers la gauche a montré que la majorité des candidats possède une note assez proche de 100. J'ai donc décidé de garder des observations.
+
+Ces actions ont permis d'obtenir 18320 observations.
+
+```{r echo=FALSE}
+# CONSTITUTION DU DATASET DE l'ETUDE
+df_filter_nomissing = df_data[df_data$date != "NR" &  df_data$cheveux != "NR" & df_data$sexe != "NR" & df_data$diplome != "NR" & df_data$specialite != "NR" & df_data$dispo != "NR" &
+!is.na(df_data$age) & !is.na(df_data$exp) & !is.na(df_data$salaire) & !is.na(df_data$note) &
+df_data$age >= 18 & df_data$age <= 65 &  df_data$exp >= 0,]
+
+# On enlève le facteur "NR"
+df_filter_nomissing$date <- factor(df_filter_nomissing$date) 
+df_filter_nomissing$specialite <- factor(df_filter_nomissing$specialite) 
+df_filter_nomissing$sexe <- factor(df_filter_nomissing$sexe)
+df_filter_nomissing$cheveux <- factor(df_filter_nomissing$cheveux) 
+df_filter_nomissing$diplome <- factor(df_filter_nomissing$diplome) 
+df_filter_nomissing$dispo <- factor(df_filter_nomissing$dispo) 
+```
+
+```{r echo=FALSE}
+# On regarde le profil des candidats ayant des notes > 100
+df_notes_sup_100 <- df_filter_nomissing[df_filter_nomissing$note > 100, ]
+pander(table(df_notes_sup_100$specialite))
+pander(table(df_notes_sup_100$diplome))
+```
+```{r echo=FALSE}
+# Distribution (histogramme) de la note pour cette strate des candidats ayant eu une note > 100
+fun_build_1d_plot("note", df_notes_sup_100)
+```
+
+### 2. Profil de la variable cible embauche
+
+
+La distribution de la variable cible embauche ci-dessous nous indique qu'il y a 2090/( 16230 + 2090) = 11,41 % d'embauches
+
+```{r include=FALSE}
+df_filter_nomissing$embauche <- as.factor(as.character(df_filter_nomissing$embauche))
+pander(table(df_filter_nomissing$embauche))
+```
+
+La variable "target" embauche est donc assez déséquilibrée, mais on considère que ce déséquilibre n'est pas trop grave pour notre étude. On pourra néanmoins pour la partie Machine Learning envisager une métrique de mesure des performances plus adaptée qu'une simple mesure du type "accuracy"
+
+### 4. Liaisons des variables continues et catégorielles et liaisons avec la variable embauche
+
+```{r echo=FALSE}
+# Matrice des corrélations (entre les variables coninues age, salaire et note)
+mydata.rcorr = rcorr(as.matrix(df_filter_nomissing[, c("age","salaire","note")]))
+pander(mydata.rcorr$r)
+```
+
+```{r echo=FALSE}
+# Analyses des liaisons entre les variables continues et la variable cible embauche
+# La fonction fun_build_2d_plot génère ici des boxplots
+b1 <- fun_build_2d_plot(df_filter_nomissing, "age","embauche")
+b2 <- fun_build_2d_plot(df_filter_nomissing, "salaire","embauche")
+b3 <- fun_build_2d_plot(df_filter_nomissing, "note","embauche")
+grid.arrange(b1,b2,b3,nrow = 1,ncol = 3)
+```
+```{r echo=FALSE, warning=FALSE}
+# Tests de Kruskall Wallis entre variable continue versus catégorielle = embauche
+k1 <- kruskal.test(age ~ embauche, data = df_filter_nomissing)
+pander(k1)
+p1 <- pairwise.wilcox.test(df_filter_nomissing$age,df_filter_nomissing$embauche,p.adjust.method = "BH")
+pander(p1)
+
+k2 <- kruskal.test(note ~ embauche, data = df_filter_nomissing)
+pander(k2)
+p2 <- pairwise.wilcox.test(df_filter_nomissing$note,df_filter_nomissing$embauche,p.adjust.method = "BH")
+pander(p2)
+
+k3 <- kruskal.test(salaire ~ embauche, data = df_filter_nomissing)
+pander(k3)
+p3 <- pairwise.wilcox.test(df_filter_nomissing$salaire,df_filter_nomissing$embauche,p.adjust.method = "BH")
+pander(p3)
+```
+
+```{r echo=FALSE}
+# Liaisons entre les variables catégorielles et la variable cible embauche
+# Test du Chi-deux par rapport à la variable embauche
+fun_chi2("cheveux")
+```
+
+```{r echo=FALSE, warning=FALSE}
+# SUITE : liaisons entre les variables catégorielles et la variable cible embauche
+# Test du Chi-deux par rapport à la variable embauche
+fun_chi2("sexe")
+fun_chi2("diplome")
+fun_chi2("specialite")
+```
+```{r echo=FALSE}
+# fun_chi2("exp")
+# Test du Chi-deux par rapport à la variable embauche
+fun_chi2("dispo")
+```
+
+Une analyse de la matrice des corrélations a mis en évidence que seule la variable salaire est un peu corrélée négativement, avec la note à l'exercice (corrélation = -0.45).
+Il est peut être pertinent de penser que la note à l'exercice peut être un facteur d'explication et de la prédiction du succès ou de l'échec d'une candidature. 
+
+Les boxplots ainsi que des tests de Kruskall Wallis non significatifs indiquent que les variables age, salaire et note prises toutes seules n'ont pas de lien fort avec la variable embauche. On peut penser aussi, que le nombre d'années d'expérience et le fait d'être spécialiste dans un domaine sont des candidats possibles à l'explication et de la prédiction du succès ou de l'échec d'une candidature.
+
+J'ai analysé les liaisons entre embauche et les variables catégorielles cheveux, sexe, diplome, specialite et dispo en sortant tous les statistiques du Chi2 entre ces variables. Et l'analyse de la variable nombre d'années d'expérience est proposée plus tard dans le document en raison de la nature ordinale de exp et de son grand nombre de modalités.
+
+J'ai constaté qu'il y a des liaisons significatives pour specialite, diplome, et sexe. Ces variables catégorielles sont donc celles qui vont en principe expliquer le mieux la variable embauche. Ceci indique que les pourcentages de candidats embauchés différent significativement pour chacune des modalités de specialite, diplome et sexe.
+
+Le tableau croisé entre specialite et embauche pour lequel on note un pourcentage de 20% de candidats embauchés pour les archéologues.
+
+```{r echo=FALSE}
+# Création du tableau croisé entre specialite et embauche
+fun_crosstable_with_embauche("specialite")
+```
+
+Plusieurs croisements sont possibles mais je propose ici un résultat intéressant entre les variables age, salaire et note et la variable specialite: on constate que les notes, les salaires et les âges varient beaucoup entre les archéologues, les détectives,  les spécialistes en forage et les géologues.
+
+```{r echo=FALSE}
+# Lien entre variables continues et catégorielles
+# On génère ici des boxplots
+g1 <- fun_build_2d_plot(df_filter_nomissing,"age", "specialite")
+g2 <- fun_build_2d_plot(df_filter_nomissing,"salaire", "specialite")
+g3 <- fun_build_2d_plot(df_filter_nomissing,"note", "specialite")
+grid.arrange(g1,g2,g3,nrow=1,ncol=3)
+# k1 <- kruskal.test(note ~ specialite, data = df_filter_nomissing)
+# pander(k1)
+# p1 <- pairwise.wilcox.test(df_filter_nomissing$note,df_filter_nomissing$specialite,p.adjust.method = "BH")
+# pander(p1)
+# 
+# k2 <- kruskal.test(salaire ~ specialite, data = df_filter_nomissing)
+# pander(k2)
+# p2 <- pairwise.wilcox.test(df_filter_nomissing$salaire,df_filter_nomissing$specialite,p.adjust.method = "BH")
+# pander(p2)
+# 
+# k3 <- kruskal.test(age ~ specialite, data = df_filter_nomissing)
+# pander(k3)
+# p3 <- pairwise.wilcox.test(df_filter_nomissing$age,df_filter_nomissing$specialite,p.adjust.method = "BH")
+# pander(p3)
+
+```
+
+#### 5. Analyse de la variable date de candidature
+
+On peut se demander si cette date de candidature n’influe pas sur l’embauche. Après création des variables “annee” et “mois” et analyse (graphique) de la liaison entre la variable mois et la variable embauche, le mois tel qu’il est codé avec ses 12 modalités est apparu sans lien statistique avec l’embauche. Mais j’ai voulu analyser l’évolution du % d’embauchés pour chaque mois écoulé. 
+
+```{r echo=FALSE}
+# Création des variables annee, mois, jour
+newColNames <- c("annee", "mois","jour")
+newCols <- colsplit(df_filter_nomissing$date, "-", newColNames)
+df_filter_nomissing <- cbind(df_filter_nomissing, newCols)
+df_filter_nomissing$annee <- as.factor(as.character(df_filter_nomissing$annee))
+
+# Tri des données par mois croissant
+df_filter_nomissing <- df_filter_nomissing[order(df_filter_nomissing$mois,decreasing = F), ]
+# On met en facteur la variable mois
+df_filter_nomissing$mois <- as.factor(df_filter_nomissing$mois)
+
+# Diagramme en barres de la variable annee
+g1 <- fun_build_1d_plot("annee", df_filter_nomissing)
+# Diagramme en barres entre annee et embauche
+g2 <- fun_build_2d_plot(df_filter_nomissing, "annee", "embauche")
+
+# Diagramme en barres de la variable mois
+g3 <- fun_build_1d_plot("mois", df_filter_nomissing)
+# Diagramme en barres entre mois et embauche
+g4 <- fun_build_2d_plot(df_filter_nomissing, "mois", "embauche")
+grid.arrange(g1,g2,g3,g4,nrow = 2, ncol = 2)
+```
+
+```{r echo=FALSE}
+# On met la variable mois en entier
+df_filter_nomissing$mois <- as.integer(df_filter_nomissing$mois)
+
+# Test du chi-deux avec la variable embauche
+fun_chi2("mois")
+```
+
+```{r echo=FALSE}
+# Création de la variable date au format date
+df_filter_nomissing$date = as.Date(df_filter_nomissing$date)
+# Tri du dataframe par date croissante
+df_filter_nomissing <- df_filter_nomissing[order(df_filter_nomissing$date,decreasing = F),]
+
+# On calcule ici le nombre d'embauches par mois
+df_temp = df_filter_nomissing
+
+# Agrégat du nombre d'embauches par annee et mois
+df_temp$embauche = as.numeric(levels(df_temp$embauche)[df_temp$embauche])
+df_nb_embauches = df_temp %>% 
+  group_by(annee, mois) %>% 
+  summarise(nb_embauches = sum(embauche))
+
+# Agrégat du nombre de candidats par annee et mois
+df_nb_candidats = df_temp %>% 
+  group_by(annee, mois) %>% 
+  summarise(nb_candidats = n())
+
+# Calcul du % d'embauchés par annee et mois
+df_pct_embauche = merge(df_nb_embauches,df_nb_candidats, by = c("annee", "mois"))
+
+df_pct_embauche$annee = as.numeric(levels(df_pct_embauche$annee)[df_pct_embauche$annee])
+
+df_pct_embauche$annee_mois = paste0(df_pct_embauche$annee,str_pad(df_pct_embauche$mois, 2, pad = "0") )
+# On trie les données par annee_mois croissante
+df_pct_embauche = df_pct_embauche[order(df_pct_embauche$annee_mois,decreasing = F),]
+df_pct_embauche$pct = round(df_pct_embauche$nb_embauches/df_pct_embauche$nb_candidats,2)
+# On met en facteur la colonne annee_mois
+df_pct_embauche$annee_mois = as.factor(df_pct_embauche$annee_mois)
+
+# Courbe du % d'embauchés pour chaque mois
+g = ggplot(data = df_pct_embauche, aes(x = annee_mois, y = pct,group=1,)) +
+  geom_line(color = "#00AFBB", size = 1) +
+  theme(axis.text.x=element_blank())
+g
+```
+
+Tout en notant le caractère très irrégulier du % de candidats embauchés, on peut s'interroger sur la possibilté de créer une feature qui tienne compte d'une période pour laquelle le % d’embauche est plutôt élevée ou plutôt faible.
+
+Par exemple, on pourrait créer:
+
+* une feature “année” + “mois” en vue de tester cette variable lors de la phase de Machine Learning, mais le nombre de modalités devraient être diminué au préalable.
+* En lien avec les pratiques de features engineering, une feature moyenne des % d'embauche ou une feature calculée grâce à la moyenne des % d’embauchés durant 15 jours précédant une date de candidature.
+
+#### 6. Intérêt de la transformation des variables avec quartiles et déciles
+
+Je choisis de recoder les variables continues age, note, salaire et aussi la variable ordinale nombre d'années d'expérience grâce à des quartiles pour obtenir de nouvelles variables possédant des effectifs équilibrés par modalité.
+Des quartiles permettent de faire de l'analyse exploratoire pour identifier éventuellement, si ces variables recodées peuvent avoir un lien statistique avec la variable cible embauche et aussi surtout à pouvoir identifier des interactions entre ces nouvelles variables et les autres comme specialite, diplome, sexe, cheveux et dispo.
+
+Un autre recodage en déciles peut aussi servir en vue de faire du feature engineering, notamment en utilisant un decision tree de type CHAID, afin de créer des variables optimales en termes d'explication par rapport à la variable cible de rendre possible des interactions avec les autres variables catégorielles.
+
+```{r echo=FALSE}
+# Création des variables quartiles pour age, exp, note et salaire
+df_filter_nomissing$age_Q <- quartiles(df_filter_nomissing$age)
+df_filter_nomissing$exp_Q <- quartiles(df_filter_nomissing$exp)
+df_filter_nomissing$note_Q <- quartiles(df_filter_nomissing$note)
+df_filter_nomissing$salaire_Q <- quartiles(df_filter_nomissing$salaire)
+
+# Création des variables déciles pour age, note et salaire
+df_filter_nomissing$age_D <- deciles(df_filter_nomissing$age)
+# df_filter_nomissing$exp_dec <- deciles(df_filter_nomissing$exp)
+df_filter_nomissing$note_D <- deciles(df_filter_nomissing$note)
+df_filter_nomissing$salaire_D <- deciles(df_filter_nomissing$salaire)
+
+```
+
+Les "Chi-deux" ont montré des liaisons significatives entre les variables note_Q, salaire_Q et embauche. 
+
+```{r echo=FALSE}
+# Test du chi-deux avec la variable embauche 
+fun_chi2("age_Q")
+fun_chi2("exp_Q")
+```
+```{r echo=FALSE}
+# Test du chi-deux avec la variable embauche 
+fun_chi2("note_Q")
+fun_chi2("salaire_Q")
+```
+
+De même, les variables déciles de l'âge, de la note et du salaire sont apparues liées à la variable cible embauche.
+
+```{r echo=FALSE}
+# Test du chi-deux avec la variable embauche
+fun_chi2("age_D")
+# fun_chi2("exp_D")
+fun_chi2("note_D")
+fun_chi2("salaire_D")
+```
+
+#### 7. Croisements 3D entre variables et embauche
+
+Voici ce qu'on obtient visuellement:
+
+* si on croise la spécialité, la note (en quartiles) et le % de candidats embauchés
+
+* Si on croise la spécialité, la disponibilité des candidats et le % de candidats embauchés
+
+* Si on croise la spécialité, le diplôme des candidats et le % de candidats embauchés
+
+* Si on croise la spécialité, la sexe des candidats et le % de candidats embauchés
+
+```{r echo=FALSE}
+# Tableau croisé entre spécialité et note en quartiles 
+fun_crosstable_each_other("specialite","note_Q")
+```
+
+```{r echo=FALSE}
+# De manière similaire au calcule du % d'embauchés par annee et mois
+# On calcule le % d'embauchés par specialite et note en quartiles
+df_temp = df_filter_nomissing
+
+df_temp$embauche = as.numeric(levels(df_temp$embauche)[df_temp$embauche])
+df_nb_embauches = df_temp %>% 
+  group_by(specialite, note_Q) %>% 
+  summarise(nb_embauches = sum(embauche))
+
+df_nb_candidats = df_temp %>% 
+  group_by(specialite, note_Q) %>% 
+  summarise(nb_candidats = n())
+
+df_pct_embauche = merge(df_nb_embauches,df_nb_candidats, by = c("specialite", "note_Q"))
+df_pct_embauche$pct = round(df_pct_embauche$nb_embauches/df_pct_embauche$nb_candidats,2)
+
+g1 <- fun_build_3dplot(df_pct_embauche,"specialite","note_Q")
+                      
+df_temp = df_filter_nomissing
+df_temp$embauche = as.numeric(levels(df_temp$embauche)[df_temp$embauche])
+df_nb_embauches = df_temp %>% 
+  group_by(specialite, dispo) %>% 
+  summarise(nb_embauches = sum(embauche))
+
+df_nb_candidats = df_temp %>% 
+  group_by(specialite, dispo) %>% 
+  summarise(nb_candidats = n())
+
+df_pct_embauche = merge(df_nb_embauches,df_nb_candidats, by = c("specialite", "dispo"))
+df_pct_embauche$pct = round(df_pct_embauche$nb_embauches/df_pct_embauche$nb_candidats,2)
+
+# Graphe 3D entre specialite, dispo et %d'embauchés
+g2 <- fun_build_3dplot(df_pct_embauche,"specialite","dispo")
+grid.arrange(g1,g2,nrow = 1, ncol = 2)
+
+# De manière similaire au calcule du % d'embauchés par annee et mois
+# On calcule le % d'embauchés par specialite et diplome
+df_temp = df_filter_nomissing
+df_temp$embauche = as.numeric(levels(df_temp$embauche)[df_temp$embauche])
+df_nb_embauches = df_temp %>% 
+  group_by(specialite, diplome) %>% 
+  summarise(nb_embauches = sum(embauche))
+
+df_nb_candidats = df_temp %>% 
+  group_by(specialite, diplome) %>% 
+  summarise(nb_candidats = n())
+
+df_pct_embauche = merge(df_nb_embauches,df_nb_candidats, by = c("specialite", "diplome"))
+df_pct_embauche$pct = round(df_pct_embauche$nb_embauches/df_pct_embauche$nb_candidats,2)
+
+# Graphe 3D entre specialite, diplome et % d'embauche
+g3 <- fun_build_3dplot(df_pct_embauche,"specialite","diplome")
+
+# De manière similaire au calcule du % d'embauchés par annee et mois
+# On calcule le % d'embauchés par specialite et sexe
+df_temp = df_filter_nomissing
+df_temp$embauche = as.numeric(levels(df_temp$embauche)[df_temp$embauche])
+df_nb_embauches = df_temp %>% 
+  group_by(specialite, sexe) %>% 
+  summarise(nb_embauches = sum(embauche))
+
+df_nb_candidats = df_temp %>% 
+  group_by(specialite, sexe) %>% 
+  summarise(nb_candidats = n())
+
+df_pct_embauche = merge(df_nb_embauches,df_nb_candidats, by = c("specialite", "sexe"))
+df_pct_embauche$pct = round(df_pct_embauche$nb_embauches/df_pct_embauche$nb_candidats,2)
+
+# Graphe 3D entre specialite, sexe et % d'embauche
+g4 <- fun_build_3dplot(df_pct_embauche,"specialite","sexe")
+grid.arrange(g3,g4,nrow = 1, ncol = 2)
+```
+
+Ce croisement de variables montre clairement que ce sont les archéologues qui sont les plus embauchés par rapport aux autres spécialités et ce d'autant plus que leurs notes obtenues à l'exercice ont été basses.
+D'autres croisements avec la spécialité ont aussi montré que :
+- il y a beaucoup d'embauches parmi les archéologues d'autant plus que qu'ils sont peu diplômés
+- il y a beaucoup d'embauches parmi les archéologues d'autant plus que qu'ils sont des hommes
+
+### Conclusion sur les variables à sélectionner
+
+Les résultats des Chi2 ont montré que les variables catégorielles spécialité, diplôme et sexe sont intéressantes à sélectionner en vue de la prédiction du succès ou de l'échec d'une candidature.
+
+De plus, les statistiques du Chi2 sont significatives pour les nouvelles variables de type quartiles pour la note et le salaire. Pour ce qui concerne, les autres variables de type déciles, cette fois ce sont l'âge, la note et le salaire qui sont significatifs. Et l'expérience est à nouveau non significative pour la variable de type quartile.
+
+Par conséquent, toutes les variables:
+
+* spécialité, diplôme et sexe
+* quartile de la note et quartile du salaire
+* décile de l'âge, décile de la note et décile du salaire
+
+sont des features intéressantes à sélectionner en vue de la prédiction du succès ou de l'échec d'une candidature. Enfin, le graphe 3D vu au paragraphe 7., indique clairement que la variable disponibilité des candidats est intéressante pour la prédiction du succès ou de l'échec d'une candidature.
+
+## 2. Dépendances statistiques
+
+```{r echo=FALSE}
+# a) spécialité et sexe
+# Tableau croisé entre specialite et setxe
+fun_crosstable_each_other("specialite","sexe")
+# Test du chi-deux entre specialite et sexe
+fun_chi2_each_other("specialite","sexe")
+
+```
+
+```{r echo=FALSE}
+# b) Couleur de cheveux et salaire demandé
+# Tableau croisé entre cheveux et salaire en quartiles
+fun_crosstable_each_other("cheveux","salaire_Q")
+# Test du chi-deux entre cheveux et salaire en quartiles
+fun_chi2_each_other("cheveux","salaire_Q")
+```
+
+```{r echo=FALSE}
+# c) Nombre d'années d'expérience et note à l'exercice
+# Tableau croisé entre exp en quartiles et note en quartiles
+fun_crosstable_each_other("exp_Q","note_Q")
+# Test du chi-deux entre exp en quartiles et note en quartiles
+fun_chi2_each_other("exp_Q","note_Q")
+```
+J'ai utilisé ici des tests du Chi-deux et choisi les versions de variables avec quartiles pour le salaire, le nombre d'années d'expérience et la note à l'exercice en vue de considérer des variables ayant un petit nombre de modalités.
+
+a) On constate grâce à la P-value très inférieure à 0.05 pour la statistique du Chi2, que la dépendance statistique est très significative entre spécialité et sexe d'autant plus que les différentes spécialités sont composées de proportions d'hommes et de femmes très différentes. 
+
+b) La P-value du test entre la couleur des cheveux et le salaire demandé indique qu'il y a une certaine dépendance statistique. 
+
+c) En revanche, il n'y a pas de dépendance statistique entre le nombre d'années d'expérience et la note à l'exercice. 
+
+```{r include=FALSE}
+# Export en .csv pour Machine Learning avec Python
+ write.csv(x = df_filter_nomissing,file = "../ml_python/data/all_data_before_ml.csv",row.names = F)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
